@@ -56,7 +56,7 @@ team_t team = {
 #define PUT_NOTAG(p, val)	(*(unsigned int *)(p) = (val))
 
 /* Set predecedent or successive pointer for free blocks */
-#define SET_PTR(p, ptr) 	(*(unsigned int *)(p) = (unsigned int)(ptr))
+#define SET_BP(p, bp) 	(*(unsigned int *)(p) = (unsigned int)(bp))
 
 /* Read the size and allocated fields from address p */
 #define GET_SIZE(p)	(GET(p) & ~0x7)
@@ -74,12 +74,12 @@ team_t team = {
 #define PREV_BLKP(bp) 	((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
 
 /* Given block ptr bp, compute address of previous and next entries of free block*/
-#define PRED_PTR(ptr)	((char *)(ptr))
-#define SUCC_PTR(ptr)	((char *)(ptr) + WSIZE)
+#define PRED_BP(bp)	((char *)(bp))
+#define SUCC_BP(bp)	((char *)(bp) + WSIZE)
 
 /* Compute the address of previous and next block on the segregated list */
-#define PRED(ptr)	(*(char **)(ptr))
-#define SUCC(ptr)	(*(char **)(SUCC_PTR(ptr)))
+#define PRED(bp)	(*(char **)(bp))
+#define SUCC(bp)	(*(char **)(SUCC_PTR(bp)))
 
 /* rounds up to the nearest multiple of ALIGNMENT */
 #define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
@@ -91,17 +91,84 @@ team_t team = {
 
 /* Private global variables */
 void *segregated_free_lists[LISTLIMIT];
-static void *extend_heap(size_t size);
-static void *coalesce(void *ptr);
-static void *place(void *ptr, size_t asize);
-static void insert_node(void *ptr, size_t size);
-static void delete_node(void *ptr);
+static void *extend_heap(size_t words);
+static void *coalesce(void *bp);
+static void *place(void *bp, size_t size);
+static void insert_node(void *bp, size_t size);
+static void delete_node(void *bp);
 
 static char *mem_heap;      /* Points to first byte of heap */
 static char *mem_brk;       /* Points to last byte of heap plus one */
 static char *mem_max_addr;  /* Max legal heap addr plus one */
 static char *heap_listp;    /* Points to the prologue block or next block */
 
+/* --------------------------------Helper Functions-------------------------------------- */
+
+/* 
+ * Extends the heap with a new free block 
+ */
+static void *extend_heap(size_t words)
+{
+	char *bp;
+	size_t size;
+	
+	/* Allocate an even number of words to maintain alignment */
+	size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
+	if ((long)(bp = mem_sbrk(size)) == -1)
+		return NULL;
+	
+	/* Initialize free block header/footer and the epilogue header */
+	PUT_NOTAG(HDRP(bp), PACK(size, 0);			/* Free block header */
+	PUT_NOTAG(FTRP(bp), PACK(size, 0);			/* Free block footer */
+	PUT_NOTAG(HDRP(NEXT_BLKP(bp)), PACK(0, 1));	/* New epilogue header */
+	insert_node(bp, size);
+			  
+	/* Coalesce if the previous block was free */
+	return coalesce(bp);
+}	
+
+static void insert_node(void *bp, size_t size)
+{
+	int list = 0;
+	void *search_bp = bp;
+	void *insert_bp = NULL;
+	
+	/* Select segregated list */
+	while ((list < LISTLIMIT - 1) && (size > 1)) {
+		size >>= 1;
+		list ++;
+	}
+	
+	/* Search list and order by size increasingly */
+	search_bp = segregated_free_list[list];
+	while ((search_bp != NULL) && (size > GET_SIZE(HDRP(search_bp)))) {
+		insert_bp = search_bp;
+		search_bp = PRED(search_bp);
+	}
+	
+	/* Initialize previous and next pointer */
+	if (search_bp != NULL) {
+		if (insert_bp != NULL) {
+			SET_BP(PRED_BP(bp), search_bp);
+			SET_BP(SUCC_BP(search_bp), bp);
+			SET_BP(SUCC_BP(bp), insert_bp);
+			SET_BP(PRED_BP(insert_bp), bp);
+		} else {
+			SET_BP(PRED_BP(bp), search_bp);
+			SET_BP(SUCC_BP(search_bp), bp);
+			SET_BP(SUCC_bp), NULL);
+			segregated_free_lists[list] = bp;
+		}
+	}
+	
+	return;
+}
+			  
+static void delete_note(void *bp)
+{
+	
+	
+	
 /* 
  * mm_init - initialize the malloc package.
  */
@@ -126,28 +193,55 @@ int mm_init(void)
 	return 0;
 }
 		
-/* 
- * Extends the heap with a new free block 
- */
-static void *extend_heap(size_t words)
+
+static void *coalesce(void *bp)
 {
-	char *bp;
-	size_t size;
+	size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
+	size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
+	size_t size = GET_SIZE(HDRP(bp));
 	
-	/* Allocate an even number of words to maintain alignment */
-	size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
-	if ((long)(bp = mem_sbrk(size)) == -1)
-		return NULL;
+	if (prev_alloc && next_alloc) {			/* Case 1 */
+		return bp;
+	}
 	
-	/* Initialize free block header/footer and the epilogue header */
-	PUT(HDRP(bp), PACK(size, 0);			/* Free block header */
-	PUT(FTRP(bp), PACK(size, 0);			/* Free block footer */
-	PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));	/* New epilogue header */
-		
-	/* Coalesce if the previous block was free */
-	return coalesce(bp);
+	else if(prev_alloc && !next_alloc) {	/* Case 2 */
+		size += GET_SIZE(HDRP(NEXT)BLKP(bp)));
+		PUT(HDRP(bp), PACK(size, 0));
+		PUT(FTRP(bp), PACK(size, 0));
+	}
 	
+	else if(!prev_alloc && next_alloc) {	/* Case 3 */
+		size += GET_SIZE(HDRP(PREV_BLKP(bp)));
+		PUT(FTRP(bp), PACK(size, 0);
+		PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+		bp = PREV_BLKP(bp);
+	}
 	
+	else {									/* Case 4 */
+		size += GET_SIZE(HDRP(PREV_BLKP(bp))) +
+			GET_SIZE(FTRP(NEXT_BLKP(bp)));
+		PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+		PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
+		bp = PREV_BLKP(bp);
+	}
+	return bp;
+}
+	
+			
+/*
+ * A first-fit search of the implicit free list
+ */
+static void *find_fit(size_t size){
+}
+
+/*
+ * Place the requested block at the beginning of the free block,
+ * splitting only if the size of the remainder would equal or
+ * exceed the minimum block size
+ */
+static void place(void *bp, size_t size){
+}
+
 /*
  * mem_sbrk - Simple model of sbrk function. Extends the heap
  *  by incr bytes and returns the start addr of the new area.
@@ -209,20 +303,6 @@ void *mm_malloc(size_t size)
 }
 		
 /*
- * A first-fit search of the implicit free list
- */
-static void *find_fit(size_t size){
-}
-
-/*
- * Place the requested block at the beginning of the free block,
- * splitting only if the size of the remainder would equal or
- * exceed the minimum block size
- */
-static void place(void *bp, size_t size){
-}
-
-/*
  * mm_free - Frees a block and uses boundary-tag coalescing to merge it
  * with any adjacent free blocks in constant time.
  */
@@ -235,38 +315,6 @@ void mm_free(void *ptr)
 	coalesce(bp);
 }		
 
-static void *coalesce(void *bp)
-{
-	size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
-	size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
-	size_t size = GET_SIZE(HDRP(bp));
-	
-	if (prev_alloc && next_alloc) {			/* Case 1 */
-		return bp;
-	}
-	
-	else if(prev_alloc && !next_alloc) {	/* Case 2 */
-		size += GET_SIZE(HDRP(NEXT)BLKP(bp)));
-		PUT(HDRP(bp), PACK(size, 0));
-		PUT(FTRP(bp), PACK(size, 0));
-	}
-	
-	else if(!prev_alloc && next_alloc) {	/* Case 3 */
-		size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-		PUT(FTRP(bp), PACK(size, 0);
-		PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-		bp = PREV_BLKP(bp);
-	}
-	
-	else {									/* Case 4 */
-		size += GET_SIZE(HDRP(PREV_BLKP(bp))) +
-			GET_SIZE(FTRP(NEXT_BLKP(bp)));
-		PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-		PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
-		bp = PREV_BLKP(bp);
-	}
-	return bp;
-			}
 /*
  * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
  */
