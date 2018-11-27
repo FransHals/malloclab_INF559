@@ -42,35 +42,61 @@ team_t team = {
 #define WSIZE		4		/* Word and header/footer size (bytes) */
 #define DSIZE		8		/* Double word size (bytes) */
 #define CHUNKSIZE	(1<<12)		/* Extend heap by this amount (bytes) */
+#define INITCHUNKSIZE	(1<<6)		
 
 #define MAX(x, y) ((x) > (y)? (x) : (y))
+#define MIN(x, y) ((x) < (y)? (x) : (y))
 
 /* Pack a size and allocated bit into a word */
 #define PACK(size, alloc) ((size) | (alloc))
 
 /* Read and write a worrd at address p */
-#define GET(p)		(*(unsigned int *)(p))
-#define PUT(p, val)	(*(unsigned int *)(p) = (val))
+#define GET(p)			(*(unsigned int *)(p))
+#define PUT(p, val)		(*(unsigned int *)(p) = (val)) | GET_TAG(p))
+#define PUT_NOTAG(p, val)	(*(unsigned int *)(p) = (val))
+
+/* Set predecedent or successive pointer for free blocks */
+#define SET_PTR(p, ptr) 	(*(unsigned int *)(p) = (unsigned int)(ptr))
 
 /* Read the size and allocated fields from address p */
 #define GET_SIZE(p)	(GET(p) & ~0x7)
 #define GET_ALLOC(p)	(GET(p) & 0x1)
+#define GET_TAG(p)	(GET(p) & 0x2)
+#define SET_RATAG(p)	(GET(p) |= 0x2)
+#define REMOVE_RATAG(p)	(GET(p) &= ~0x2)
 
 /* Given block ptr bp, compute address of its header and footer */
 #define HDRP(bp)	((char *)(bp) - WSIZE)
 #define FTRP(bp)	((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
 
 /* Given block ptr bp, compute address of next and previous blocks */
-#define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
-#define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
+#define NEXT_BLKP(bp) 	((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
+#define PREV_BLKP(bp) 	((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
+
+/* Given block ptr bp, compute address of previous and next entries of free block*/
+#define PRED_PTR(ptr)	((char *)(ptr))
+#define SUCC_PTR(ptr)	((char *)(ptr) + WSIZE)
+
+/* Compute the address of previous and next block on the segregated list */
+#define PRED(ptr)	(*(char **)(ptr))
+#define SUCC(ptr)	(*(char **)(SUCC_PTR(ptr)))
 
 /* rounds up to the nearest multiple of ALIGNMENT */
 #define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
 
+#define LISTLIMIT	20
+#define REALLOC_BUFFER	(1<<7)
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
 /* Private global variables */
+void *segregated_free_lists[LISTLIMIT];
+static void *extend_heap(size_t size);
+static void *coalesce(void *ptr);
+static void *place(void *ptr, size_t asize);
+static void insert_node(void *ptr, size_t size);
+static void delete_node(void *ptr);
+
 static char *mem_heap;      /* Points to first byte of heap */
 static char *mem_brk;       /* Points to last byte of heap plus one */
 static char *mem_max_addr;  /* Max legal heap addr plus one */
